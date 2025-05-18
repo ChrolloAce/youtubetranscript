@@ -1,11 +1,9 @@
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from youtube_transcript_api import YouTubeTranscriptApi
 import re
 import json
 import os
 import requests
-from bs4 import BeautifulSoup
 import time
 import logging
 
@@ -31,77 +29,184 @@ def extract_video_id(url):
         return match.group(6)
     return None
 
-def fallback_get_transcript(video_id):
+def direct_get_transcript(video_id, language_code='en'):
     """
-    Fallback method to get YouTube transcript when the API fails.
-    This uses a different approach to avoid IP blocking.
+    Get transcript directly using YouTube's API endpoints
     """
-    logger.info(f"Using fallback method for video {video_id}")
+    logger.info(f"Direct get transcript for video {video_id}")
     
     try:
-        # Different approach - use innertube API
+        # Create a session with browser-like headers
         session = requests.Session()
-        session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.youtube.com/',
+            'Origin': 'https://www.youtube.com'
+        })
         
-        # First get the initial page to extract necessary tokens
+        # First get initial data
         response = session.get(f'https://www.youtube.com/watch?v={video_id}')
-        
         if not response.ok:
+            logger.error(f"Failed to get video page: {response.status_code}")
             return None
         
-        html = response.text
+        # Find the JSON data in the HTML response
+        # YouTube stores important data in a JSON variable inside a script tag
+        init_data_match = re.search(r'ytInitialPlayerResponse\s*=\s*({.+?});', response.text)
+        if not init_data_match:
+            logger.error("Could not find initial player data")
+            return None
+            
+        init_data = json.loads(init_data_match.group(1))
         
-        # Try to extract transcript data from the page directly
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Look for transcript data in script tags
-        transcript_data = []
-        scripts = soup.find_all('script')
-        
-        for script in scripts:
-            script_text = script.string
-            if script_text and '"captionTracks"' in script_text:
-                # Try to extract caption tracks URL
-                caption_match = re.search(r'"captionTracks":\s*(\[.*?\])', script_text)
-                if caption_match:
-                    caption_data = json.loads(caption_match.group(1).replace('\\u0026', '&'))
+        # Try to extract caption tracks directly
+        caption_tracks = []
+        try:
+            caption_tracks = init_data['captions']['playerCaptionsTracklistRenderer']['captionTracks']
+        except (KeyError, TypeError):
+            logger.error("No caption tracks found in player data")
+            return None
+            
+        # Find the requested language or fall back to English
+        selected_track = None
+        for track in caption_tracks:
+            if track.get('languageCode') == language_code:
+                selected_track = track
+                break
+                
+        # If we can't find the requested language, try to get first English track
+        if not selected_track:
+            for track in caption_tracks:
+                if track.get('languageCode') == 'en':
+                    selected_track = track
+                    break
                     
-                    if caption_data:
-                        # Get the first available English transcript
-                        for track in caption_data:
-                            if track.get('languageCode', '') == 'en':
-                                base_url = track.get('baseUrl', '')
-                                if base_url:
-                                    # Get the transcript data
-                                    transcript_response = session.get(base_url)
-                                    if transcript_response.ok:
-                                        # Parse XML response
-                                        soup = BeautifulSoup(transcript_response.text, 'html.parser')
-                                        transcript_elements = soup.find_all('text')
-                                        
-                                        for element in transcript_elements:
-                                            start = float(element.get('start', 0))
-                                            duration = float(element.get('dur', 0)) if element.get('dur') else 0
-                                            text = element.get_text()
-                                            
-                                            transcript_data.append({
-                                                'text': text,
-                                                'start': start,
-                                                'duration': duration
-                                            })
-                                        
-                                        return {
-                                            'language': 'English',
-                                            'language_code': 'en',
-                                            'is_generated': True,
-                                            'transcript_data': transcript_data
-                                        }
+        # If still not found, use the first available track
+        if not selected_track and caption_tracks:
+            selected_track = caption_tracks[0]
+            
+        if not selected_track:
+            logger.error("No usable caption track found")
+            return None
+            
+        # Get the transcript data directly from the baseUrl
+        caption_url = selected_track.get('baseUrl')
+        if not caption_url:
+            logger.error("No baseUrl in selected track")
+            return None
+            
+        # Format parameter helps us get a JSON response
+        if '?' in caption_url:
+            caption_url += '&fmt=json3'
+        else:
+            caption_url += '?fmt=json3'
+            
+        caption_response = session.get(caption_url)
+        if not caption_response.ok:
+            logger.error(f"Failed to get caption data: {caption_response.status_code}")
+            return None
+            
+        caption_data = caption_response.json()
         
-        return None
+        # Process the transcript data
+        transcript_data = []
+        events = caption_data.get('events', [])
         
+        for event in events:
+            # Skip events without segment text
+            if not event.get('segs'):
+                continue
+                
+            # Get the text from all segments in this event
+            text = ""
+            for seg in event.get('segs', []):
+                if seg.get('utf8'):
+                    text += seg.get('utf8')
+                    
+            # Skip empty segments
+            if not text.strip():
+                continue
+                
+            transcript_data.append({
+                'text': text,
+                'start': event.get('tStartMs', 0) / 1000,  # Convert to seconds
+                'duration': (event.get('dDurationMs', 0) / 1000)  # Convert to seconds
+            })
+            
+        if not transcript_data:
+            logger.error("No transcript data extracted")
+            return None
+            
+        return {
+            'language': selected_track.get('name', {}).get('simpleText', 'Unknown'),
+            'language_code': selected_track.get('languageCode', 'unknown'),
+            'is_generated': 'kind' in selected_track and selected_track['kind'] == 'asr',
+            'transcript_data': transcript_data
+        }
+            
     except Exception as e:
-        logger.error(f"Fallback method error: {str(e)}")
+        logger.error(f"Direct method error: {str(e)}")
         return None
+
+def get_available_languages_direct(video_id):
+    """
+    Get available languages directly using YouTube's API endpoints
+    """
+    logger.info(f"Direct get available languages for video {video_id}")
+    
+    try:
+        # Create a session with browser-like headers
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.youtube.com/',
+            'Origin': 'https://www.youtube.com'
+        })
+        
+        # Get initial data
+        response = session.get(f'https://www.youtube.com/watch?v={video_id}')
+        if not response.ok:
+            logger.error(f"Failed to get video page: {response.status_code}")
+            return None
+        
+        # Find the JSON data in the HTML response
+        init_data_match = re.search(r'ytInitialPlayerResponse\s*=\s*({.+?});', response.text)
+        if not init_data_match:
+            logger.error("Could not find initial player data")
+            return None
+            
+        init_data = json.loads(init_data_match.group(1))
+        
+        # Try to extract caption tracks
+        caption_tracks = []
+        try:
+            caption_tracks = init_data['captions']['playerCaptionsTracklistRenderer']['captionTracks']
+        except (KeyError, TypeError):
+            logger.error("No caption tracks found in player data")
+            return []
+            
+        # Process languages
+        languages = []
+        for track in caption_tracks:
+            language_name = track.get('name', {}).get('simpleText', 'Unknown')
+            language_code = track.get('languageCode', 'unknown')
+            is_auto_generated = 'kind' in track and track['kind'] == 'asr'
+            
+            languages.append({
+                'language': language_name,
+                'language_code': language_code,
+                'is_generated': is_auto_generated,
+                'is_translatable': False,  # We don't support translation with this method
+                'translation_languages': []
+            })
+            
+        return languages
+            
+    except Exception as e:
+        logger.error(f"Get available languages direct error: {str(e)}")
+        return []
 
 @app.route('/')
 def index():
@@ -122,75 +227,32 @@ def get_transcript():
     # Log request information for debugging
     logger.info(f"Transcript request for video ID: {video_id}")
     
-    try:
-        languages = data.get('languages', ['en'])
-        preserve_formatting = data.get('preserve_formatting', False)
-        
-        # Get the list of transcripts
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        
-        # Find the preferred transcript
-        transcript = transcript_list.find_transcript(languages)
-        
-        # Fetch the actual transcript data
-        transcript_data = transcript.fetch()
-        
-        # Convert to a serializable format
-        response = {
+    languages = data.get('languages', ['en'])
+    language_code = languages[0] if languages else 'en'
+    
+    # Use direct method to get transcript
+    transcript_result = direct_get_transcript(video_id, language_code)
+    
+    if transcript_result:
+        return jsonify({
             'video_id': video_id,
-            'language': transcript.language,
-            'language_code': transcript.language_code,
-            'is_generated': transcript.is_generated,
+            'language': transcript_result['language'],
+            'language_code': transcript_result['language_code'],
+            'is_generated': transcript_result['is_generated'],
             'snippets': [
                 {
                     'text': item['text'],
                     'start': item['start'],
                     'duration': item['duration']
-                } for item in transcript_data
+                } for item in transcript_result['transcript_data']
             ]
-        }
-        
-        return jsonify(response)
-    except Exception as e:
-        error_message = str(e)
-        logger.error(f"API method error: {error_message}")
-        
-        # Try fallback method if the API method fails
-        if "Could not retrieve a transcript" in error_message:
-            logger.info("Trying fallback method...")
-            fallback_result = fallback_get_transcript(video_id)
-            
-            if fallback_result:
-                return jsonify({
-                    'video_id': video_id,
-                    'language': fallback_result['language'],
-                    'language_code': fallback_result['language_code'],
-                    'is_generated': fallback_result['is_generated'],
-                    'snippets': [
-                        {
-                            'text': item['text'],
-                            'start': item['start'],
-                            'duration': item['duration']
-                        } for item in fallback_result['transcript_data']
-                    ]
-                })
-        
-        # Create more user-friendly error messages
-        if "Could not retrieve a transcript" in error_message:
-            return jsonify({
-                'error': 'No transcript available for this video',
-                'details': 'This video either has no captions/subtitles or they have been disabled by the creator.',
-                'video_id': video_id
-            }), 404
-        elif "not in language" in error_message:
-            return jsonify({
-                'error': 'The requested language is not available for this video',
-                'details': 'Try using the /api/available-languages endpoint to see what languages are available.',
-                'video_id': video_id
-            }), 404
-        
-        # Default error response
-        return jsonify({'error': error_message}), 500
+        })
+    else:
+        return jsonify({
+            'error': 'No transcript available for this video',
+            'details': 'This video either has no captions/subtitles or they have been disabled by the creator.',
+            'video_id': video_id
+        }), 404
 
 @app.route('/api/available-languages', methods=['POST'])
 def get_available_languages():
@@ -207,55 +269,17 @@ def get_available_languages():
     # Log request information for debugging
     logger.info(f"Available languages request for video ID: {video_id}")
     
-    try:
-        # Get the list of transcripts
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        
-        # Create a list of available languages
-        languages = []
-        for transcript in transcript_list:
-            languages.append({
-                'language': transcript.language,
-                'language_code': transcript.language_code,
-                'is_generated': transcript.is_generated,
-                'is_translatable': transcript.is_translatable,
-                'translation_languages': [
-                    {'language': lang['language'], 'language_code': lang['language_code']}
-                    for lang in transcript.translation_languages
-                ] if transcript.is_translatable else []
-            })
-        
+    # Use direct method to get available languages
+    languages = get_available_languages_direct(video_id)
+    
+    if languages:
         return jsonify({'video_id': video_id, 'available_languages': languages})
-    except Exception as e:
-        error_message = str(e)
-        logger.error(f"Available languages error: {error_message}")
-        
-        # Try fallback method for available languages
-        if "Could not retrieve a transcript" in error_message:
-            fallback_result = fallback_get_transcript(video_id)
-            
-            if fallback_result:
-                return jsonify({
-                    'video_id': video_id, 
-                    'available_languages': [{
-                        'language': fallback_result['language'],
-                        'language_code': fallback_result['language_code'],
-                        'is_generated': fallback_result['is_generated'],
-                        'is_translatable': False,
-                        'translation_languages': []
-                    }]
-                })
-        
-        # Create more user-friendly error messages
-        if "Could not retrieve a transcript" in error_message:
-            return jsonify({
-                'error': 'No transcripts available for this video',
-                'details': 'This video either has no captions/subtitles or they have been disabled by the creator.',
-                'video_id': video_id
-            }), 404
-        
-        # Default error response
-        return jsonify({'error': error_message}), 500
+    else:
+        return jsonify({
+            'error': 'No transcripts available for this video',
+            'details': 'This video either has no captions/subtitles or they have been disabled by the creator.',
+            'video_id': video_id
+        }), 404
 
 if __name__ == '__main__':
     # Get port from environment variable or default to 5000
