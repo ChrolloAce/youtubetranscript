@@ -69,7 +69,24 @@ def get_transcript():
         
         return jsonify(response)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        error_message = str(e)
+        
+        # Create more user-friendly error messages
+        if "Could not retrieve a transcript" in error_message:
+            return jsonify({
+                'error': 'No transcript available for this video',
+                'details': 'This video either has no captions/subtitles or they have been disabled by the creator.',
+                'video_id': video_id
+            }), 404
+        elif "not in language" in error_message:
+            return jsonify({
+                'error': 'The requested language is not available for this video',
+                'details': 'Try using the /api/available-languages endpoint to see what languages are available.',
+                'video_id': video_id
+            }), 404
+        
+        # Default error response
+        return jsonify({'error': error_message}), 500
 
 @app.route('/api/available-languages', methods=['POST'])
 def get_available_languages():
@@ -103,7 +120,18 @@ def get_available_languages():
         
         return jsonify({'video_id': video_id, 'available_languages': languages})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        error_message = str(e)
+        
+        # Create more user-friendly error messages
+        if "Could not retrieve a transcript" in error_message:
+            return jsonify({
+                'error': 'No transcripts available for this video',
+                'details': 'This video either has no captions/subtitles or they have been disabled by the creator.',
+                'video_id': video_id
+            }), 404
+        
+        # Default error response
+        return jsonify({'error': error_message}), 500
 
 if __name__ == '__main__':
     # Get port from environment variable or default to 5000

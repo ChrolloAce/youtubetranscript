@@ -15,8 +15,17 @@ document.addEventListener('DOMContentLoaded', function() {
     let availableLanguages = [];
     
     // Function to show error message
-    function showError(message) {
+    function showError(message, details) {
         errorContainer.textContent = message;
+        
+        // Add details if provided
+        if (details) {
+            const detailsElement = document.createElement('p');
+            detailsElement.className = 'mt-2 small text-muted';
+            detailsElement.textContent = details;
+            errorContainer.appendChild(detailsElement);
+        }
+        
         errorContainer.classList.remove('d-none');
         loadingIndicator.classList.add('d-none');
     }
@@ -60,7 +69,11 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => {
             if (!response.ok) {
                 return response.json().then(data => {
-                    throw new Error(data.error || 'Failed to fetch languages');
+                    if (data.error === 'No transcripts available for this video') {
+                        throw new Error(`${data.error}. ${data.details || ''}`);
+                    } else {
+                        throw new Error(data.error || 'Failed to fetch languages');
+                    }
                 });
             }
             return response.json();
@@ -135,7 +148,12 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => {
             if (!response.ok) {
                 return response.json().then(data => {
-                    throw new Error(data.error || 'Failed to fetch transcript');
+                    if (data.error === 'No transcript available for this video' || 
+                        data.error === 'The requested language is not available for this video') {
+                        throw new Error(`${data.error}. ${data.details || ''}`);
+                    } else {
+                        throw new Error(data.error || 'Failed to fetch transcript');
+                    }
                 });
             }
             return response.json();
