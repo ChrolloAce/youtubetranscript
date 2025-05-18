@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Transcript API</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h1 class="text-center">YouTube Transcript Fetcher</h1>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-4">
+                            <label for="youtube-url" class="form-label">Enter YouTube URL:</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="youtube-url" placeholder="https://www.youtube.com/watch?v=...">
+                                <button class="btn btn-primary" id="fetch-btn">Fetch Transcript</button>
+                            </div>
+                        </div>
+
+                        <div id="language-selection" class="mb-4 d-none">
+                            <label class="form-label">Available Languages:</label>
+                            <div id="language-options" class="mb-3"></div>
+                            <button class="btn btn-success" id="get-transcript-btn">Get Transcript</button>
+                        </div>
+
+                        <div id="loading" class="text-center d-none">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p>Fetching transcript data...</p>
+                        </div>
+
+                        <div id="error-container" class="alert alert-danger d-none" role="alert"></div>
+
+                        <div id="transcript-container" class="d-none">
+                            <h3>Transcript</h3>
+                            <div class="mb-2">
+                                <button class="btn btn-sm btn-outline-secondary" id="copy-btn">Copy to Clipboard</button>
+                                <button class="btn btn-sm btn-outline-secondary" id="download-btn">Download as Text</button>
+                            </div>
+                            <div id="transcript-content" class="border p-3 bg-light" style="max-height: 500px; overflow-y: auto;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html> 
