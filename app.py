@@ -9,8 +9,8 @@ from functools import wraps
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Get API key from environment variable or use a default for development
-API_KEY = os.environ.get('API_KEY', 'your-development-api-key')
+# Hardcoded API key - simple and works everywhere
+API_KEY = "587db8aefe5c9924095615a386e2d0e1"  # This is the key we generated earlier
 
 def require_api_key(f):
     @wraps(f)
