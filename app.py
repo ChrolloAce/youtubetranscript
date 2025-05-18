@@ -4,25 +4,9 @@ from youtube_transcript_api import YouTubeTranscriptApi
 import re
 import json
 import os
-from functools import wraps
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
-
-# Hardcoded API key - simple and works everywhere
-API_KEY = "587db8aefe5c9924095615a386e2d0e1"  # This is the key we generated earlier
-
-def require_api_key(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Get API key from request headers or query parameters
-        api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
-        
-        if not api_key or api_key != API_KEY:
-            return jsonify({'error': 'Unauthorized: Invalid or missing API key'}), 401
-        
-        return f(*args, **kwargs)
-    return decorated_function
 
 def extract_video_id(url):
     """
@@ -44,7 +28,6 @@ def index():
     return render_template('index.html')
 
 @app.route('/api/transcript', methods=['POST'])
-@require_api_key
 def get_transcript():
     data = request.json
     if not data or 'url' not in data:
@@ -89,7 +72,6 @@ def get_transcript():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/available-languages', methods=['POST'])
-@require_api_key
 def get_available_languages():
     data = request.json
     if not data or 'url' not in data:
